@@ -5,7 +5,8 @@
 SIM ?= icarus
 TOPLEVEL_LANG ?= verilog
 SRC_DIR = $(PWD)/../src
-PROJECT_SOURCES = project.v
+PROJECT_SOURCES = tt_um_cordic_wrapper.v
+PROJECT_SOURCES += cordic_vec.v
 
 ifneq ($(GATES),yes)
 
@@ -34,8 +35,8 @@ endif
 COMPILE_ARGS 		+= -I$(SRC_DIR)
 
 # Include the testbench sources:
-VERILOG_SOURCES += $(PWD)/tb.v
-TOPLEVEL = tb
+VERILOG_SOURCES += $(PWD)/CORDIC_wrapper_tb.v
+TOPLEVEL = CORDIC_wrapper_tb
 
 # MODULE is the basename of the Python test file
 MODULE = test
