@@ -64,11 +64,14 @@ module CORDIC_vec #(parameter integer width = 16, parameter integer GUARD = 2) (
         end
     endgenerate
 
-    // ---- Saídas ----
+    // ---- Saídas (sem UNUSED) ----
     wire signed [INTW:0]    scaled_magnitude = x_pipe[width];
     wire signed [INTW+16:0] mult_full        = scaled_magnitude * INV_K;
-    wire signed [INTW+16:0] mag_full_q       = mult_full >>> INV_K_Q_BITS;
 
-    assign magnitude = mag_full_q[width-1:0]; // corte explícito
+    // Gere já no tamanho exato que será usado, evitando bits “sobrando”
+    wire signed [width-1:0] mag_q =
+        (mult_full >>> INV_K_Q_BITS) [width-1:0];
+
+    assign magnitude = mag_q;
     assign phase     = -z_pipe[width];
 endmodule
