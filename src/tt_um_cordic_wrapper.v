@@ -1,11 +1,4 @@
-/*
- * Wrapper para CORDIC para tapeout.
- * Versão revisada (fix deadlock de in_ready):
- * - in_ready alto durante a recepção dos 4 bytes (toda a transação).
- * - Estado S_IN_WAIT para bloquear novas entradas enquanto o core está ocupado.
- * - core_busy = pipeline_busy || tx_busy.
- */
-// tt_um_cordic_wrapper.v — Verilog-2001 compatível com Yosys/TinyTapeout
+// tt_um_cordic_wrapper.v — TinyTapeout topo (Verilog-2001)
 module tt_um_cordic_wrapper #(parameter integer WIDTH = 16)
 (
     input  wire        clk,
@@ -21,10 +14,9 @@ module tt_um_cordic_wrapper #(parameter integer WIDTH = 16)
     // -------------------------------
     // --- Configuração de latência ---
     // -------------------------------
-    localparam integer PIPE_LAT = WIDTH;      // nº de ciclos até saída válida do CORDIC
-
-    reg  [PIPE_LAT:0]            latency_shifter;   // 1 bit extra
-    wire                         result_is_valid;
+    localparam integer PIPE_LAT = WIDTH;            // nº de ciclos até saída válida
+    reg  [PIPE_LAT:0]  latency_shifter;            // 1 bit extra
+    wire               result_is_valid;
 
     // -------------------------------
     // --- Handshake I/O (uio) ---
@@ -34,17 +26,21 @@ module tt_um_cordic_wrapper #(parameter integer WIDTH = 16)
     reg  out_valid;
     wire out_ready;
 
-    // Mapeamento: uio[2:1] como saídas (uio_oe=1) e demais como entrada (uio_oe=0)
-    assign uio_oe      = 8'b00000110; // uio[2]=out_valid, uio[1]=in_ready
-    assign in_valid    = uio_in[0];
-    assign out_ready   = uio_in[3];
-    assign uio_out[1]  = in_ready;
-    assign uio_out[2]  = out_valid;
-    assign uio_out[7:3]= 5'b0;
-    assign uio_out[0]  = 1'b0;
+    // uio[2]=out_valid (saída), uio[1]=in_ready (saída)
+    assign uio_oe       = 8'b0000_0110;
+    assign in_valid     = uio_in[0];
+    assign out_ready    = uio_in[3];
+    assign uio_out[1]   = in_ready;
+    assign uio_out[2]   = out_valid;
+    assign uio_out[7:3] = 5'b0;
+    assign uio_out[0]   = 1'b0;
+
+    // Consumir bits de uio_in não usados (silencia verilator UNUSED)
+    wire _unused_uio_in;
+    assign _unused_uio_in = &{1'b0, uio_in[7:4], uio_in[2:1]};
 
     // -------------------------------
-    // --- Estados (codificação) ---
+    // --- Estados Entrada/Saída ---
     // -------------------------------
     // Entrada
     localparam [2:0]
@@ -53,7 +49,6 @@ module tt_um_cordic_wrapper #(parameter integer WIDTH = 16)
         S_IN_Y_LSB = 3'd2,
         S_IN_Y_MSB = 3'd3,
         S_IN_WAIT  = 3'd4;
-
     reg [2:0] in_state;
 
     // Saída
@@ -65,29 +60,26 @@ module tt_um_cordic_wrapper #(parameter integer WIDTH = 16)
         S_OUT_PHASE_B1 = 3'd4,
         S_OUT_PHASE_B2 = 3'd5,
         S_OUT_PHASE_B3 = 3'd6;
-
     reg [2:0] out_state;
 
     // -------------------------------
     // --- Registradores de dados ---
     // -------------------------------
-    reg signed [WIDTH-1:0]  x_input_reg;
-    reg signed [WIDTH-1:0]  y_input_reg;
-    reg signed [WIDTH-1:0]  magnitude_reg;
-    reg signed [31:0]       phase_reg;
-    reg [7:0]               uo_out_reg;
+    reg  signed [WIDTH-1:0] x_input_reg;
+    reg  signed [WIDTH-1:0] y_input_reg;
+    reg  signed [WIDTH-1:0] magnitude_reg;
+    reg  signed [31:0]      phase_reg;
+    reg  [7:0]              uo_out_reg;
 
-    // Controle de fluxo
     reg start_cordic_pipeline;
     reg result_ready_for_tx;
 
     // -------------------------------
-    // --- Instância do CORDIC ---
+    // --- Núcleo CORDIC ---
     // -------------------------------
     wire signed [WIDTH-1:0] cordic_mag_out;
     wire signed [31:0]      cordic_phase_out;
 
-    // OBS: garanta que CORDIC_vec é Verilog (.v) e sintetizável.
     CORDIC_vec #(.width(WIDTH)) u_cordic_core (
         .clock     (clk),
         .x_start   (x_input_reg),
@@ -96,10 +88,8 @@ module tt_um_cordic_wrapper #(parameter integer WIDTH = 16)
         .phase     (cordic_phase_out)
     );
 
-    // -------------------------------
-    // --- Busy flags ---
-    // -------------------------------
-    wire pipeline_busy = |latency_shifter;                  // há operações em voo
+    // Busy flags
+    wire pipeline_busy = |latency_shifter;
     wire tx_busy       = (out_state != S_OUT_IDLE) | result_ready_for_tx;
     wire core_busy     = pipeline_busy | tx_busy;
 
@@ -124,29 +114,25 @@ module tt_um_cordic_wrapper #(parameter integer WIDTH = 16)
                         in_state <= S_IN_X_MSB;
                     end
                 end
-
                 S_IN_X_MSB: begin
                     if (in_valid & in_ready) begin
                         x_input_reg[15:8] <= ui_in;
                         in_state <= S_IN_Y_LSB;
                     end
                 end
-
                 S_IN_Y_LSB: begin
                     if (in_valid & in_ready) begin
                         y_input_reg[7:0] <= ui_in;
                         in_state <= S_IN_Y_MSB;
                     end
                 end
-
                 S_IN_Y_MSB: begin
                     if (in_valid & in_ready) begin
                         y_input_reg[15:8] <= ui_in;
-                        start_cordic_pipeline <= 1'b1;      // dispara o CORDIC
+                        start_cordic_pipeline <= 1'b1; // dispara o CORDIC
                         in_state <= S_IN_WAIT;
                     end
                 end
-
                 S_IN_WAIT: begin
                     if (!core_busy)
                         in_state <= S_IN_IDLE;
@@ -162,8 +148,8 @@ module tt_um_cordic_wrapper #(parameter integer WIDTH = 16)
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            latency_shifter     <= { (PIPE_LAT+1){1'b0} };
-            magnitude_reg       <= { WIDTH{1'b0} };
+            latency_shifter     <= {(PIPE_LAT+1){1'b0}};
+            magnitude_reg       <= {WIDTH{1'b0}};
             phase_reg           <= 32'sd0;
             result_ready_for_tx <= 1'b0;
         end else if (ena) begin
@@ -201,32 +187,26 @@ module tt_um_cordic_wrapper #(parameter integer WIDTH = 16)
                         out_valid  <= 1'b1;
                     end
                 end
-
                 S_OUT_MAG_LSB: if (out_ready) begin
                     out_state  <= S_OUT_MAG_MSB;
                     uo_out_reg <= magnitude_reg[15:8];
                 end
-
                 S_OUT_MAG_MSB: if (out_ready) begin
                     out_state  <= S_OUT_PHASE_B0;
                     uo_out_reg <= phase_reg[7:0];
                 end
-
                 S_OUT_PHASE_B0: if (out_ready) begin
                     out_state  <= S_OUT_PHASE_B1;
                     uo_out_reg <= phase_reg[15:8];
                 end
-
                 S_OUT_PHASE_B1: if (out_ready) begin
                     out_state  <= S_OUT_PHASE_B2;
                     uo_out_reg <= phase_reg[23:16];
                 end
-
                 S_OUT_PHASE_B2: if (out_ready) begin
                     out_state  <= S_OUT_PHASE_B3;
                     uo_out_reg <= phase_reg[31:24];
                 end
-
                 S_OUT_PHASE_B3: if (out_ready) begin
                     out_state  <= S_OUT_IDLE;
                     out_valid  <= 1'b0;
@@ -235,7 +215,4 @@ module tt_um_cordic_wrapper #(parameter integer WIDTH = 16)
             endcase
         end
     end
-
 endmodule
-
-
