@@ -137,6 +137,10 @@ module tt_um_cordic_wrapper #(parameter integer WIDTH = 16)
                     if (!core_busy)
                         in_state <= S_IN_IDLE;
                 end
+                default: begin
+                    // Cobertura total para o linter
+                    in_state <= S_IN_IDLE;
+                end
             endcase
         end
     end
@@ -208,6 +212,12 @@ module tt_um_cordic_wrapper #(parameter integer WIDTH = 16)
                     uo_out_reg <= phase_reg[31:24];
                 end
                 S_OUT_PHASE_B3: if (out_ready) begin
+                    out_state  <= S_OUT_IDLE;
+                    out_valid  <= 1'b0;
+                    uo_out_reg <= 8'h00;
+                end
+                default: begin
+                    // Cobertura total para o linter
                     out_state  <= S_OUT_IDLE;
                     out_valid  <= 1'b0;
                     uo_out_reg <= 8'h00;
