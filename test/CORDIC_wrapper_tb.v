@@ -1,143 +1,86 @@
-`timescale 1ns / 1ps
+`timescale 1ns/1ps
 
 module tb_cordic_wrapper;
+    // clock/reset
+    reg clk;
+    reg rst_n;
+    reg ena;
 
-    localparam WIDTH      = 16;
-    localparam CLK_PERIOD = 10; // 100 MHz
-
-    reg  clk;
-    reg  rst_n;
-    reg  ena;
+    // TT I/O
     reg  [7:0] ui_in;
     wire [7:0] uo_out;
-    reg  [7:0] uio_in_tb;
-    wire [7:0] uio_out_tb;
-    wire [7:0] uio_en_tb;
+    reg  [7:0] uio_in;
+    wire [7:0] uio_out;
+    wire [7:0] uio_oe;
 
-    wire [7:0] uio_in_dut = uio_in_tb;
-
-    tt_um_cordic_wrapper #(.WIDTH(WIDTH)) dut (
-        .clk(clk),
-        .rst_n(rst_n),
-        .ena(ena),
-        .ui_in(ui_in),
-        .uo_out(uo_out),
-        .uio_in(uio_in_dut),
-        .uio_en(uio_en_tb),
-        .uio_out(uio_out_tb)
+    // DUT = seu topo TT
+    tt_um_cordic_wrapper #(.WIDTH(16)) dut (
+        .clk    (clk),
+        .rst_n  (rst_n),
+        .ena    (ena),
+        .ui_in  (ui_in),
+        .uo_out (uo_out),
+        .uio_in (uio_in),
+        .uio_out(uio_out),
+        .uio_oe (uio_oe)
     );
 
-    wire dut_in_ready   = uio_out_tb[1];
-    wire dut_out_valid  = uio_out_tb[2];
+    // clock 10ns
+    initial clk = 0;
+    always #5 clk = ~clk;
 
-    reg tb_in_valid;
-    reg tb_out_ready;
-
-    always @* begin
-        uio_in_tb[0] = tb_in_valid;
-        uio_in_tb[3] = tb_out_ready;
-    end
-
-    // Clock
-    always begin
-        clk = 1'b0; #(CLK_PERIOD/2);
-        clk = 1'b1; #(CLK_PERIOD/2);
-    end
-
-    // --- envio ---
-    task send_first_byte(input [7:0] data);
-    begin
-        @(posedge clk);
-        wait (dut_in_ready == 1'b1);
-        ui_in <= data;
-        tb_in_valid <= 1'b1;
-        @(posedge clk);
-        tb_in_valid <= 1'b0;
-        ui_in <= 8'hzz;
-    end
-    endtask
-
-    task send_next_byte(input [7:0] data);
-    begin
-        @(posedge clk);
-        ui_in <= data;
-        tb_in_valid <= 1'b1;
-        @(posedge clk);
-        tb_in_valid <= 1'b0;
-        ui_in <= 8'hzz;
-    end
-    endtask
-
-    // --- recepção ---
-    task receive_byte(output [7:0] data);
-    begin
-        @(posedge clk);
-        wait (dut_out_valid == 1'b1);
-        data = uo_out;
-        tb_out_ready <= 1'b1;
-        @(posedge clk);
-        tb_out_ready <= 1'b0;
-    end
-    endtask
-
-    // --- execução de um teste ---
-    task run_test(input signed [WIDTH-1:0] x_val, input signed [WIDTH-1:0] y_val);
-        reg signed [WIDTH-1:0] mag_res;
-        reg signed [31:0] phase_res;
-        reg [7:0] byte_data;
-    begin
-        $display("\n=== Teste: X = %0d (0x%h), Y = %0d (0x%h) ===", x_val, x_val, y_val, y_val);
-
-        send_first_byte(x_val[7:0]);
-        send_next_byte(x_val[15:8]);
-        send_next_byte(y_val[7:0]);
-        send_next_byte(y_val[15:8]);
-
-        receive_byte(byte_data); mag_res[7:0]   = byte_data;
-        receive_byte(byte_data); mag_res[15:8]  = byte_data;
-        receive_byte(byte_data); phase_res[7:0]   = byte_data;
-        receive_byte(byte_data); phase_res[15:8]  = byte_data;
-        receive_byte(byte_data); phase_res[23:16] = byte_data;
-        receive_byte(byte_data); phase_res[31:24] = byte_data;
-
-        $display(">>> Resultado: Magnitude = %0d (0x%h)", mag_res, mag_res);
-        $display(">>> Resultado: Fase = %0d (0x%h)", phase_res, phase_res);
-    end
-    endtask
-
-    // --- inicialização ---
+    // simples “driver” do seu protocolo:
+    // uio_oe[1]=in_ready (saída do DUT), uio_oe[2]=out_valid (saída do DUT)
+    // uio_in[0]=in_valid (entrada para DUT), uio_in[3]=out_ready (entrada para DUT)
     initial begin
-        $display("--- INICIANDO TESTBENCH ---");
-        rst_n <= 1'b0;
-        ena <= 1'b1;
-        ui_in <= 8'hzz;
-        tb_in_valid <= 1'b0;
-        tb_out_ready <= 1'b0;
+        rst_n   = 0;
+        ena     = 0;
+        ui_in   = 8'h00;
+        uio_in  = 8'h00;
 
-        repeat(20) @(posedge clk);
-        rst_n <= 1'b1;
-        $display("[%0t ns] Reset liberado.", $time);
+        repeat (5) @(posedge clk);
+        rst_n = 1;
+        ena   = 1;
 
-        wait (dut_in_ready == 1'b1);
-        $display("[%0t ns] DUT pronto para receber.", $time);
+        // envia X[7:0], X[15:8], Y[7:0], Y[15:8] quando in_ready=1
+        send_byte(8'h24); // X LSB
+        send_byte(8'h35); // X MSB
+        send_byte(8'h81); // Y LSB
+        send_byte(8'h5E); // Y MSB
 
-        // Novos valores para cada quadrante
-        run_test( 12000,   8000);   // Q1: X>0, Y>0
-        #(20*CLK_PERIOD);
+        // consome 6 bytes de saída (mag[7:0], mag[15:8], phase[7:0],15:8,23:16,31:24)
+        consume_bytes(6);
 
-        run_test(-15000,  10000);   // Q2: X<0, Y>0
-        #(20*CLK_PERIOD);
-
-        run_test(-18000, -22000);   // Q3: X<0, Y<0
-        #(20*CLK_PERIOD);
-
-        run_test( 25000, -12000);   // Q4: X>0, Y<0
-        #(20*CLK_PERIOD);
-
-        $display("\n--- TESTBENCH CONCLUÍDO ---");
+        repeat (20) @(posedge clk);
         $finish;
     end
 
+    task send_byte(input [7:0] b);
+    begin
+        // espera in_ready (uio_out[1]) — lembre: uio_oe controla tri-state, mas no TB
+        // podemos só olhar uio_out[1] porque o wrapper já define uio_oe internamente.
+        while (uio_out[1] !== 1'b1) @(posedge clk);
+        ui_in    <= b;
+        uio_in[0]<= 1'b1;  // in_valid=1
+        @(posedge clk);
+        uio_in[0]<= 1'b0;  // in_valid=0
+    end
+    endtask
+
+    task consume_bytes(input integer n);
+        integer i;
+    begin
+        for (i=0;i<n;i=i+1) begin
+            // sinaliza que pode consumir (out_ready=1)
+            uio_in[3] <= 1'b1;
+            // espera out_valid=1
+            while (uio_out[2] !== 1'b1) @(posedge clk);
+            // lê uo_out aqui se quiser ($display)
+            $display("[TB] byte%0d = 0x%02x", i, uo_out);
+            @(posedge clk);
+            uio_in[3] <= 1'b0;
+            @(posedge clk);
+        end
+    end
+    endtask
 endmodule
-
-
