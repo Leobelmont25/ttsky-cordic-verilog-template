@@ -5,7 +5,7 @@
  * - Estado S_IN_WAIT para bloquear novas entradas enquanto o core está ocupado.
  * - core_busy = pipeline_busy || tx_busy.
  */
-module CORDIC_tapeout_wrapper #(parameter WIDTH = 16)
+module tt_um_cordic_wrapper #(parameter WIDTH = 16)
 (
     input   wire            clk,
     input   wire            rst_n,
