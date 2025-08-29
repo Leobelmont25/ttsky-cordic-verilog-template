@@ -16,7 +16,7 @@ module tb_cordic_wrapper;
 
     wire [7:0] uio_in_dut = uio_in_tb;
 
-    CORDIC_tapeout_wrapper #(.WIDTH(WIDTH)) dut (
+    tt_um_cordic_wrapper #(.WIDTH(WIDTH)) dut (
         .clk(clk),
         .rst_n(rst_n),
         .ena(ena),
