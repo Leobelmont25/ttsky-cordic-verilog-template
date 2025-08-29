@@ -36,7 +36,7 @@ COMPILE_ARGS 		+= -I$(SRC_DIR)
 
 # Include the testbench sources:
 VERILOG_SOURCES += $(PWD)/CORDIC_wrapper_tb.v
-TOPLEVEL = CORDIC_wrapper_tb
+TOPLEVEL = tb_cordic_wrapper
 
 # MODULE is the basename of the Python test file
 # MODULE = test
