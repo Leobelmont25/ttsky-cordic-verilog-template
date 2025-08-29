@@ -1,77 +1,218 @@
-module CORDIC_vec #(parameter integer width = 16, parameter integer GUARD = 2) (
-    input  wire                       clock,
-    input  wire signed [width-1:0]    x_start,
-    input  wire signed [width-1:0]    y_start,
-    output wire signed [width-1:0]    magnitude,
-    output wire signed [31:0]         phase     // Q1.31 (angulo/PI)
+// tt_um_cordic_wrapper.v — TinyTapeout topo (Verilog-2001)
+module tt_um_cordic_wrapper #(parameter integer WIDTH = 16)
+(
+    input  wire        clk,
+    input  wire        rst_n,
+    input  wire        ena,
+    input  wire [7:0]  ui_in,
+    output wire [7:0]  uo_out,
+    input  wire [7:0]  uio_in,
+    output wire [7:0]  uio_out,
+    output wire [7:0]  uio_oe
 );
-    localparam integer INTW = width + GUARD;
-    localparam signed [15:0] INV_K = 16'sh26DF; // ~0.6073 Q2.14
-    localparam integer        INV_K_Q_BITS = 14;
 
-    // ---- ATAN LUT (simulação) ----
-    reg signed [31:0] atan_table [0:width-1];
-    integer i;
-    initial begin
-        for (i = 0; i < width; i = i + 1) begin
-            real angle_rad;
-            real angle_norm;
-            angle_rad  = $atan(1.0 / (1 << i));
-            angle_norm = angle_rad / 3.141592653589793;
-            atan_table[i] = $rtoi(angle_norm * (2.0**31)); // Q1.31
-        end
-    end
+    // -------------------------------
+    // --- Configuração de latência ---
+    // -------------------------------
+    localparam integer PIPE_LAT = WIDTH;            // nº de ciclos até saída válida
+    reg  [PIPE_LAT:0]  latency_shifter;            // 1 bit extra
+    wire               result_is_valid;
 
-    // ---- Pré-processamento (sign-extend antes de negar) ----
-    localparam integer EXT = (INTW + 1) - width;
-    wire signed [INTW:0] x_ext = {{EXT{x_start[width-1]}}, x_start};
-    wire signed [INTW:0] y_ext = {{EXT{y_start[width-1]}}, y_start};
+    // -------------------------------
+    // --- Handshake I/O (uio) ---
+    // -------------------------------
+    wire in_valid;
+    reg  in_ready;
+    reg  out_valid;
+    wire out_ready;
 
-    wire signed [INTW:0] x0_input = x_start[width-1] ? -x_ext : x_ext;
-    wire signed [INTW:0] y0_input = x_start[width-1] ? -y_ext : y_ext;
+    // uio[2]=out_valid (saída), uio[1]=in_ready (saída)
+    assign uio_oe       = 8'b0000_0110;
+    assign in_valid     = uio_in[0];
+    assign out_ready    = uio_in[3];
+    assign uio_out[1]   = in_ready;
+    assign uio_out[2]   = out_valid;
+    assign uio_out[7:3] = 5'b0;
+    assign uio_out[0]   = 1'b0;
 
-    wire signed [31:0] z0_input =
-        (x_start[width-1] == 1'b0) ? 32'sd0 :
-        (y_start[width-1] == 1'b0) ? -32'sh8000_0000 : 32'sh8000_0000;
+    // Consumir bits de uio_in não usados (silencia verilator UNUSED)
+    wire _unused_uio_in;
+    assign _unused_uio_in = &{1'b0, uio_in[7:4], uio_in[2:1]};
 
-    // ---- Pipeline ----
-    reg signed [INTW:0] x_pipe [0:width];
-    reg signed [INTW:0] y_pipe [0:width];
-    reg signed [31:0]   z_pipe [0:width];
+    // -------------------------------
+    // --- Estados Entrada/Saída ---
+    // -------------------------------
+    // Entrada
+    localparam [2:0]
+        S_IN_IDLE  = 3'd0,
+        S_IN_X_MSB = 3'd1,
+        S_IN_Y_LSB = 3'd2,
+        S_IN_Y_MSB = 3'd3,
+        S_IN_WAIT  = 3'd4;
+    reg [2:0] in_state;
 
-    always @(posedge clock) begin
-        x_pipe[0] <= x0_input;
-        y_pipe[0] <= y0_input;
-        z_pipe[0] <= z0_input;
-    end
+    // Saída
+    localparam [2:0]
+        S_OUT_IDLE     = 3'd0,
+        S_OUT_MAG_LSB  = 3'd1,
+        S_OUT_MAG_MSB  = 3'd2,
+        S_OUT_PHASE_B0 = 3'd3,
+        S_OUT_PHASE_B1 = 3'd4,
+        S_OUT_PHASE_B2 = 3'd5,
+        S_OUT_PHASE_B3 = 3'd6;
+    reg [2:0] out_state;
 
-    genvar stage;
-    generate
-        for (stage = 0; stage < width; stage = stage + 1) begin : cordic_stage
-            wire signed [INTW:0] x_shift = x_pipe[stage] >>> stage;
-            wire signed [INTW:0] y_shift = y_pipe[stage] >>> stage;
-            always @(posedge clock) begin
-                if (y_pipe[stage] >= 0) begin
-                    x_pipe[stage+1] <= x_pipe[stage] + y_shift;
-                    y_pipe[stage+1] <= y_pipe[stage] - x_shift;
-                    z_pipe[stage+1] <= z_pipe[stage] - atan_table[stage];
-                end else begin
-                    x_pipe[stage+1] <= x_pipe[stage] - y_shift;
-                    y_pipe[stage+1] <= y_pipe[stage] + x_shift;
-                    z_pipe[stage+1] <= z_pipe[stage] + atan_table[stage];
+    // -------------------------------
+    // --- Registradores de dados ---
+    // -------------------------------
+    reg  signed [WIDTH-1:0] x_input_reg;
+    reg  signed [WIDTH-1:0] y_input_reg;
+    reg  signed [WIDTH-1:0] magnitude_reg;
+    reg  signed [31:0]      phase_reg;
+    reg  [7:0]              uo_out_reg;
+
+    reg start_cordic_pipeline;
+    reg result_ready_for_tx;
+
+    // -------------------------------
+    // --- Núcleo CORDIC ---
+    // -------------------------------
+    wire signed [WIDTH-1:0] cordic_mag_out;
+    wire signed [31:0]      cordic_phase_out;
+
+    CORDIC_vec #(.width(WIDTH)) u_cordic_core (
+        .clock     (clk),
+        .x_start   (x_input_reg),
+        .y_start   (y_input_reg),
+        .magnitude (cordic_mag_out),
+        .phase     (cordic_phase_out)
+    );
+
+    // Busy flags
+    wire pipeline_busy = |latency_shifter;
+    wire tx_busy       = (out_state != S_OUT_IDLE) | result_ready_for_tx;
+    wire core_busy     = pipeline_busy | tx_busy;
+
+    // -------------------------------
+    // --- FSM de Entrada ---
+    // -------------------------------
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            in_state              <= S_IN_IDLE;
+            in_ready              <= 1'b1;
+            start_cordic_pipeline <= 1'b0;
+            x_input_reg           <= {WIDTH{1'b0}};
+            y_input_reg           <= {WIDTH{1'b0}};
+        end else if (ena) begin
+            start_cordic_pipeline <= 1'b0;
+            in_ready              <= (in_state != S_IN_WAIT);
+
+            case (in_state)
+                S_IN_IDLE: begin
+                    if (in_valid & in_ready) begin
+                        x_input_reg[7:0] <= ui_in;
+                        in_state <= S_IN_X_MSB;
+                    end
                 end
-            end
+                S_IN_X_MSB: begin
+                    if (in_valid & in_ready) begin
+                        x_input_reg[15:8] <= ui_in;
+                        in_state <= S_IN_Y_LSB;
+                    end
+                end
+                S_IN_Y_LSB: begin
+                    if (in_valid & in_ready) begin
+                        y_input_reg[7:0] <= ui_in;
+                        in_state <= S_IN_Y_MSB;
+                    end
+                end
+                S_IN_Y_MSB: begin
+                    if (in_valid & in_ready) begin
+                        y_input_reg[15:8] <= ui_in;
+                        start_cordic_pipeline <= 1'b1; // dispara o CORDIC
+                        in_state <= S_IN_WAIT;
+                    end
+                end
+                S_IN_WAIT: begin
+                    if (!core_busy)
+                        in_state <= S_IN_IDLE;
+                end
+            endcase
         end
-    endgenerate
+    end
 
-    // ---- Saídas (sem UNUSED) ----
-    wire signed [INTW:0]    scaled_magnitude = x_pipe[width];
-    wire signed [INTW+16:0] mult_full        = scaled_magnitude * INV_K;
+    // -------------------------------
+    // --- Controle de latência ---
+    // -------------------------------
+    assign result_is_valid = latency_shifter[PIPE_LAT];
 
-    // Gere já no tamanho exato que será usado, evitando bits “sobrando”
-    wire signed [width-1:0] mag_q =
-        (mult_full >>> INV_K_Q_BITS) [width-1:0];
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            latency_shifter     <= {(PIPE_LAT+1){1'b0}};
+            magnitude_reg       <= {WIDTH{1'b0}};
+            phase_reg           <= 32'sd0;
+            result_ready_for_tx <= 1'b0;
+        end else if (ena) begin
+            latency_shifter <= {latency_shifter[PIPE_LAT-1:0], start_cordic_pipeline};
 
-    assign magnitude = mag_q;
-    assign phase     = -z_pipe[width];
+            if (result_is_valid) begin
+                magnitude_reg       <= cordic_mag_out;
+                phase_reg           <= cordic_phase_out;
+                result_ready_for_tx <= 1'b1;
+            end
+
+            if (out_state != S_OUT_IDLE)
+                result_ready_for_tx <= 1'b0;
+        end
+    end
+
+    // -------------------------------
+    // --- FSM de Saída ---
+    // -------------------------------
+    assign uo_out = uo_out_reg;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            out_state  <= S_OUT_IDLE;
+            out_valid  <= 1'b0;
+            uo_out_reg <= 8'h00;
+        end else if (ena) begin
+            case (out_state)
+                S_OUT_IDLE: begin
+                    out_valid  <= 1'b0;
+                    uo_out_reg <= 8'h00;
+                    if (result_ready_for_tx) begin
+                        out_state  <= S_OUT_MAG_LSB;
+                        uo_out_reg <= magnitude_reg[7:0];
+                        out_valid  <= 1'b1;
+                    end
+                end
+                S_OUT_MAG_LSB: if (out_ready) begin
+                    out_state  <= S_OUT_MAG_MSB;
+                    uo_out_reg <= magnitude_reg[15:8];
+                end
+                S_OUT_MAG_MSB: if (out_ready) begin
+                    out_state  <= S_OUT_PHASE_B0;
+                    uo_out_reg <= phase_reg[7:0];
+                end
+                S_OUT_PHASE_B0: if (out_ready) begin
+                    out_state  <= S_OUT_PHASE_B1;
+                    uo_out_reg <= phase_reg[15:8];
+                end
+                S_OUT_PHASE_B1: if (out_ready) begin
+                    out_state  <= S_OUT_PHASE_B2;
+                    uo_out_reg <= phase_reg[23:16];
+                end
+                S_OUT_PHASE_B2: if (out_ready) begin
+                    out_state  <= S_OUT_PHASE_B3;
+                    uo_out_reg <= phase_reg[31:24];
+                end
+                S_OUT_PHASE_B3: if (out_ready) begin
+                    out_state  <= S_OUT_IDLE;
+                    out_valid  <= 1'b0;
+                    uo_out_reg <= 8'h00;
+                end
+            endcase
+        end
+    end
 endmodule
