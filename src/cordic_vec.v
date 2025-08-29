@@ -5,11 +5,11 @@ module CORDIC_vec #(parameter integer width = 16, parameter integer GUARD = 2) (
     output wire signed [width-1:0]    magnitude,
     output wire signed [31:0]         phase     // Q1.31 (angulo/PI)
 );
-    localparam integer INTW = width + GUARD;
-    localparam signed [15:0] INV_K = 16'sh26DF; // ~0.6073 Q2.14
+    localparam integer INTW = width + GUARD;      // largura interna
+    localparam signed [15:0] INV_K = 16'sh26DF;   // ~0.6073 em Q2.14
     localparam integer        INV_K_Q_BITS = 14;
 
-    // ---- ATAN LUT (simulação) ----
+    // ---- ATAN LUT (ok p/ simulação; se lint reclamar, trocar por $readmemh) ----
     reg signed [31:0] atan_table [0:width-1];
     integer i;
     initial begin
@@ -23,13 +23,14 @@ module CORDIC_vec #(parameter integer width = 16, parameter integer GUARD = 2) (
     end
 
     // ---- Pré-processamento (sign-extend antes de negar) ----
-    localparam integer EXT = (INTW + 1) - width;
+    localparam integer EXT = (INTW + 1) - width;  // constante
     wire signed [INTW:0] x_ext = {{EXT{x_start[width-1]}}, x_start};
     wire signed [INTW:0] y_ext = {{EXT{y_start[width-1]}}, y_start};
 
     wire signed [INTW:0] x0_input = x_start[width-1] ? -x_ext : x_ext;
     wire signed [INTW:0] y0_input = x_start[width-1] ? -y_ext : y_ext;
 
+    // Q1.31
     wire signed [31:0] z0_input =
         (x_start[width-1] == 1'b0) ? 32'sd0 :
         (y_start[width-1] == 1'b0) ? -32'sh8000_0000 : 32'sh8000_0000;
@@ -64,14 +65,17 @@ module CORDIC_vec #(parameter integer width = 16, parameter integer GUARD = 2) (
         end
     endgenerate
 
-    // ---- Saídas (sem UNUSED) ----
+    // ---- Saídas (compatível com Icarus + sem UNUSED) ----
     wire signed [INTW:0]    scaled_magnitude = x_pipe[width];
     wire signed [INTW+16:0] mult_full        = scaled_magnitude * INV_K;
+    wire signed [INTW+16:0] mag_shifted_full = mult_full >>> INV_K_Q_BITS;
 
-    // Gere já no tamanho exato que será usado, evitando bits “sobrando”
-    wire signed [width-1:0] mag_q =
-        (mult_full >>> INV_K_Q_BITS) [width-1:0];
+    // usa apenas width bits
+    assign magnitude = mag_shifted_full[width-1:0];
 
-    assign magnitude = mag_q;
-    assign phase     = -z_pipe[width];
+    // consome os bits altos para silenciar o Verilator (UNUSED)
+    wire _unused_mag_hi;
+    assign _unused_mag_hi = &{1'b0, mag_shifted_full[INTW+16:width]};
+
+    assign phase = -z_pipe[width];
 endmodule
