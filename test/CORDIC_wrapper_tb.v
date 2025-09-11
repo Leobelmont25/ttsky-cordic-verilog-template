@@ -35,7 +35,7 @@ module CORDIC_wrapper_tb;
         // $dumpvars(0, tb_cordic_wrapper);
     end
 
-    CORDIC_tapeout_wrapper #(.WIDTH(WIDTH)) dut (
+    tt_um_cordic_wrapper #(.WIDTH(WIDTH)) dut (
         .clk(clk),
         .rst_n(rst_n),
         .ena(ena),
