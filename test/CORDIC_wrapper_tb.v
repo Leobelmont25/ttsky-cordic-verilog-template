@@ -1,10 +1,25 @@
 `timescale 1ns / 1ps
+// Descomente se o seu template usa essa diretiva global
+// `default_nettype none
+
+// ================================
+// Parametrização via macro WIDTH
+// ================================
+`ifndef WIDTH
+  `define WIDTH 16
+`endif
 
 module CORDIC_wrapper_tb;
 
-    localparam WIDTH      = 16;
-    localparam CLK_PERIOD = 10; // 100 MHz
+    // ----------------------------
+    // Parâmetros de TB
+    // ----------------------------
+    localparam int WIDTH_TB   = `WIDTH;
+    localparam int CLK_PERIOD = 10; // 100 MHz
 
+    // ----------------------------
+    // Sinais do TB
+    // ----------------------------
     reg  clk;
     reg  rst_n;
     reg  ena;
@@ -12,58 +27,62 @@ module CORDIC_wrapper_tb;
     wire [7:0] uo_out;
     reg  [7:0] uio_in_tb;
     wire [7:0] uio_out_tb;
-    wire [7:0] uio_en_tb;
+    wire [7:0] uio_oe_tb;
 
+    // Map interno para o DUT
     wire [7:0] uio_in_dut = uio_in_tb;
 
     // ============================
-    // DUMP PARA GTKWave (VCD/FST)
+    // Dump para GTKWave (VCD)
     // ============================
     initial begin
-        // --- VCD (padrão) ---
-        $dumpfile("cordic_wrapper_tb.vcd");
-        $dumpvars(0, CORDIC_wrapper_tb);   // tudo sob o top do TB
-
-        // --- Dica: para reduzir arquivo, você pode comentar a linha acima
-        // e abrir dumps específicos:
-        // $dumpvars(1, tb_cordic_wrapper.dut);
-        // $dumpvars(2, tb_cordic_wrapper.dut.u_cordic_core);
-
-        // --- Alternativa FST (mais compacto): descomente estas duas linhas
-        // e rode com: vvp -fst sim.test
-        // $dumpfile("cordic_wrapper_tb.fst");
-        // $dumpvars(0, tb_cordic_wrapper);
+        // O CI costuma procurar esse caminho:
+        $dumpfile("test/tb.vcd");
+        $dumpvars(0, CORDIC_wrapper_tb);
     end
 
-    tt_um_cordic_wrapper #(.WIDTH(WIDTH)) dut (
-        .clk(clk),
-        .rst_n(rst_n),
-        .ena(ena),
-        .ui_in(ui_in),
-        .uo_out(uo_out),
-        .uio_in(uio_in_dut),
-        .uio_oe(uio_en_tb),
-        .uio_out(uio_out_tb)
+    // ============================
+    // DUT: tt_um_cordic_wrapper
+    //   (parametrizado via macro)
+// ============================
+    tt_um_cordic_wrapper #(.WIDTH(WIDTH_TB)) dut (
+        .clk    (clk),
+        .rst_n  (rst_n),
+        .ena    (ena),
+        .ui_in  (ui_in),
+        .uo_out (uo_out),
+        .uio_in (uio_in_dut),
+        .uio_out(uio_out_tb),
+        .uio_oe (uio_oe_tb)
     );
 
-    wire dut_in_ready   = uio_out_tb[1];
-    wire dut_out_valid  = uio_out_tb[2];
+    // Handshake do DUT via uio
+    wire dut_in_ready  = uio_out_tb[1];
+    wire dut_out_valid = uio_out_tb[2];
 
     reg tb_in_valid;
     reg tb_out_ready;
 
+    // Direciona sinais para o DUT
     always @* begin
         uio_in_tb[0] = tb_in_valid;  // in_valid
         uio_in_tb[3] = tb_out_ready; // out_ready
+        // Demais bits de uio_in não usados
+        uio_in_tb[2:1] = 2'b00;
+        uio_in_tb[7:4] = 4'b0000;
     end
 
+    // ----------------------------
     // Clock
+    // ----------------------------
     always begin
         clk = 1'b0; #(CLK_PERIOD/2);
         clk = 1'b1; #(CLK_PERIOD/2);
     end
 
-    // --- envio ---
+    // ----------------------------
+    // Tarefas de envio/recepção
+    // ----------------------------
     task send_first_byte(input [7:0] data);
     begin
         @(posedge clk);
@@ -73,7 +92,7 @@ module CORDIC_wrapper_tb;
         tb_in_valid <= 1'b1;
         @(posedge clk);
         tb_in_valid <= 1'b0;
-        ui_in <= 8'hzz;
+        ui_in <= 8'h00;
     end
     endtask
 
@@ -84,11 +103,10 @@ module CORDIC_wrapper_tb;
         tb_in_valid <= 1'b1;
         @(posedge clk);
         tb_in_valid <= 1'b0;
-        ui_in <= 8'hzz;
+        ui_in <= 8'h00;
     end
     endtask
 
-    // --- recepção ---
     task receive_byte(output [7:0] data);
     begin
         @(posedge clk);
@@ -100,19 +118,20 @@ module CORDIC_wrapper_tb;
     end
     endtask
 
-    // --- execução de um teste ---
-    task run_test(input signed [WIDTH-1:0] x_val, input signed [WIDTH-1:0] y_val);
-        reg signed [WIDTH-1:0] mag_res;
-        reg signed [31:0]      phase_res;
+    task run_test(input signed [WIDTH_TB-1:0] x_val, input signed [WIDTH_TB-1:0] y_val);
+        reg signed [WIDTH_TB-1:0] mag_res;
+        reg signed [31:0]         phase_res;
         reg [7:0] byte_data;
     begin
         $display("\n=== Teste: X = %0d (0x%h), Y = %0d (0x%h) ===", x_val, x_val, y_val, y_val);
 
+        // envia 4 bytes (X LSB/MSB, Y LSB/MSB)
         send_first_byte(x_val[7:0]);
-        send_next_byte(x_val[15:8]);
-        send_next_byte(y_val[7:0]);
-        send_next_byte(y_val[15:8]);
+        send_next_byte (x_val[15:8]);
+        send_next_byte (y_val[7:0]);
+        send_next_byte (y_val[15:8]);
 
+        // recebe 6 bytes (mag[7:0], mag[15:8], phase[7:0], phase[15:8], phase[23:16], phase[31:24])
         receive_byte(byte_data); mag_res[7:0]   = byte_data;
         receive_byte(byte_data); mag_res[15:8]  = byte_data;
         receive_byte(byte_data); phase_res[7:0]   = byte_data;
@@ -125,33 +144,37 @@ module CORDIC_wrapper_tb;
     end
     endtask
 
-    // --- inicialização ---
+    // ----------------------------
+    // Sequência de teste
+    // ----------------------------
     initial begin
         $display("--- INICIANDO TESTBENCH ---");
         rst_n <= 1'b0;
-        ena <= 1'b1;
-        ui_in <= 8'hzz;
-        tb_in_valid <= 1'b0;
+        ena   <= 1'b1;
+        ui_in <= 8'h00;
+        tb_in_valid  <= 1'b0;
         tb_out_ready <= 1'b0;
 
+        // Reset “confortável”
         repeat(20) @(posedge clk);
         rst_n <= 1'b1;
         $display("[%0t ns] Reset liberado.", $time);
 
+        // Espera DUT sinalizar pronto
         wait (dut_in_ready == 1'b1);
         $display("[%0t ns] DUT pronto para receber.", $time);
 
-        // Novos valores (diferentes dos anteriores), 1 por quadrante
-        run_test( 12000,   8000);   // Q1: X>0, Y>0
+        // --- NOVOS valores (diferentes dos anteriores), 1 por quadrante ---
+        run_test( 16'sd12000,  16'sd8000 );   // Q1: X>0, Y>0
         #(20*CLK_PERIOD);
 
-        run_test(-15000,  10000);   // Q2: X<0, Y>0
+        run_test(-16'sd15000,  16'sd10000);   // Q2: X<0, Y>0
         #(20*CLK_PERIOD);
 
-        run_test(-18000, -22000);   // Q3: X<0, Y<0
+        run_test(-16'sd18000, -16'sd22000);   // Q3: X<0, Y<0
         #(20*CLK_PERIOD);
 
-        run_test( 25000, -12000);   // Q4: X>0, Y<0
+        run_test( 16'sd25000, -16'sd12000);   // Q4: X>0, Y<0
         #(20*CLK_PERIOD);
 
         $display("\n--- TESTBENCH CONCLUÍDO ---");
