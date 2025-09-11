@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-module tb_cordic_wrapper;
+module CORDIC_wrapper_tb;
 
     localparam WIDTH      = 16;
     localparam CLK_PERIOD = 10; // 100 MHz
@@ -22,7 +22,7 @@ module tb_cordic_wrapper;
     initial begin
         // --- VCD (padrão) ---
         $dumpfile("cordic_wrapper_tb.vcd");
-        $dumpvars(0, tb_cordic_wrapper);   // tudo sob o top do TB
+        $dumpvars(0, CORDIC_wrapper_tb);   // tudo sob o top do TB
 
         // --- Dica: para reduzir arquivo, você pode comentar a linha acima
         // e abrir dumps específicos:
