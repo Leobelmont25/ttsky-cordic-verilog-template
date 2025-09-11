@@ -2,6 +2,12 @@
 
 module tb_cordic_wrapper;
     // sinais TT
+    initial begin
+        $dumpfile("tb.vcd");
+        $dumpvars(0, tb_cordic_wrapper);
+        #1;
+    end
+    
     reg clk, rst_n, ena;
     reg  [7:0] ui_in;
     wire [7:0] uo_out;
