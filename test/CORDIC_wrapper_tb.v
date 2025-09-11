@@ -6,12 +6,12 @@
  * - Works for RTL and Gate-Level (GL_TEST)
  * - Instantiates tt_um_cordic_wrapper
  */
-module tb;
+module CORDIC_wrapper_tb;
 
   // ---- VCD dump ----
   initial begin
     $dumpfile("tb.vcd");
-    $dumpvars(0, tb);
+    $dumpvars(0, CORDIC_wrapper_tb);
     #1; // garante algum tempo > 0
   end
 
