@@ -42,7 +42,7 @@ module CORDIC_wrapper_tb;
         .ui_in(ui_in),
         .uo_out(uo_out),
         .uio_in(uio_in_dut),
-        .uio_en(uio_en_tb),
+        .uio_oe(uio_en_tb),
         .uio_out(uio_out_tb)
     );
 
