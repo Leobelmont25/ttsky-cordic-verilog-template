@@ -1,10 +1,10 @@
 `timescale 1ns/1ps
 
-module tb_cordic_wrapper;
+module CORDIC_wrapper_tb;
     // sinais TT
     initial begin
-        $dumpfile("tb.vcd");
-        $dumpvars(0, tb_cordic_wrapper);
+        $dumpfile("CORDIC_wrapper_tb.vcd");
+        $dumpvars(0, CORDIC_wrapper_tb);
         #1;
     end
     
