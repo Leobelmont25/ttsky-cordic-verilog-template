@@ -1,125 +1,161 @@
-`default_nettype none
-`timescale 1ns/1ps
+`timescale 1ns / 1ps
 
-/* TinyTapeout-style testbench:
- * - Dumps signals to VCD (view in GTKWave)
- * - Works for RTL and Gate-Level (GL_TEST)
- * - Instantiates tt_um_cordic_wrapper
- */
-module CORDIC_wrapper_tb;
+module tb_cordic_wrapper;
 
-  // ---- VCD dump ----
-  initial begin
-    $dumpfile("tb.vcd");
-    $dumpvars(0, CORDIC_wrapper_tb);
-    #1; // garante algum tempo > 0
-  end
+    localparam WIDTH      = 16;
+    localparam CLK_PERIOD = 10; // 100 MHz
 
-  // ---- Signals ----
-  reg         clk;
-  reg         rst_n;
-  reg         ena;
-  reg  [7:0]  ui_in;
-  reg  [7:0]  uio_in;
-  wire [7:0]  uo_out;
-  wire [7:0]  uio_out;
-  wire [7:0]  uio_oe;
+    reg  clk;
+    reg  rst_n;
+    reg  ena;
+    reg  [7:0] ui_in;
+    wire [7:0] uo_out;
+    reg  [7:0] uio_in_tb;
+    wire [7:0] uio_out_tb;
+    wire [7:0] uio_en_tb;
 
-`ifdef GL_TEST
-  // Gate-level power pins
-  wire VPWR = 1'b1;
-  wire VGND = 1'b0;
-`endif
+    wire [7:0] uio_in_dut = uio_in_tb;
 
-  // ---- DUT ----
-  // Substitua o nome abaixo se seu top mudar
-  tt_um_cordic_wrapper dut (
-`ifdef GL_TEST
-    .VPWR   (VPWR),
-    .VGND   (VGND),
-`endif
-    .ui_in  (ui_in),     // Dedicated inputs (8 bits)
-    .uo_out (uo_out),    // Dedicated outputs (8 bits)
-    .uio_in (uio_in),    // Bidirectional: input path
-    .uio_out(uio_out),   // Bidirectional: output path
-    .uio_oe (uio_oe),    // Bidirectional: enable path (1 = output)
-    .ena    (ena),       // goes high when design is selected
-    .clk    (clk),       // clock
-    .rst_n  (rst_n)      // active-low reset
-  );
+    // ============================
+    // DUMP PARA GTKWave (VCD/FST)
+    // ============================
+    initial begin
+        // --- VCD (padrão) ---
+        $dumpfile("cordic_wrapper_tb.vcd");
+        $dumpvars(0, tb_cordic_wrapper);   // tudo sob o top do TB
 
-  // ---- Clock 100 MHz ----
-  initial clk = 1'b0;
-  always #5 clk = ~clk;
+        // --- Dica: para reduzir arquivo, você pode comentar a linha acima
+        // e abrir dumps específicos:
+        // $dumpvars(1, tb_cordic_wrapper.dut);
+        // $dumpvars(2, tb_cordic_wrapper.dut.u_cordic_core);
 
-  // ---- Handshake aliases (conforme seu wrapper) ----
-  // uio_in[0] = IN_VALID,  uio_out[1] = IN_READY
-  // uio_out[2] = OUT_VALID, uio_in[3] = OUT_READY
-  wire in_ready  = uio_out[1];
-  wire out_valid = uio_out[2];
-
-  // ---- Simple stimulus just to get waveforms ----
-  initial begin
-    // Init
-    rst_n   = 1'b0;
-    ena     = 1'b0;
-    ui_in   = 8'h00;
-    uio_in  = 8'h00;
-
-    // Reset
-    repeat (20) @(posedge clk);
-    rst_n = 1'b1;
-    ena   = 1'b1;
-
-    // Pequeno atraso pós-reset
-    repeat (5) @(posedge clk);
-
-    // ===== Envia X[7:0], X[15:8], Y[7:0], Y[15:8] =====
-    send_byte(8'h20); // X LSB
-    send_byte(8'h4E); // X MSB  => X = 0x4E20 = 20000
-    send_byte(8'h98); // Y LSB
-    send_byte(8'h3A); // Y MSB  => Y = 0x3A98 = 15000
-
-    // ===== Consome 6 bytes: mag LSB/MSB, phase[7:0],15:8,23:16,31:24 =====
-    consume_bytes(6);
-
-    // Keep sim running a bit for viewing
-    repeat (50) @(posedge clk);
-    $finish;
-  end
-
-  // ---- Tasks ----
-  task send_byte(input [7:0] b);
-  begin
-    // espera o IN_READY subir (wrapper pronto para o próximo byte)
-    @(posedge clk);
-    while (in_ready !== 1'b1) @(posedge clk);
-
-    // coloca o byte e pulsa IN_VALID por 1 ciclo
-    ui_in      <= b;
-    uio_in[0]  <= 1'b1;  // IN_VALID = 1
-    @(posedge clk);
-    uio_in[0]  <= 1'b0;  // IN_VALID = 0
-    // opcional: tri-state lógico do ui_in não é necessário, mas pode-se limpar
-    // ui_in <= 8'h00;
-  end
-  endtask
-
-  task consume_bytes(input integer n);
-    integer i;
-  begin
-    for (i = 0; i < n; i = i + 1) begin
-      // aguarda OUT_VALID, então dá OUT_READY por 1 ciclo
-      @(posedge clk);
-      while (out_valid !== 1'b1) @(posedge clk);
-      $display("[TB] out byte %0d = 0x%02x", i, uo_out);
-      uio_in[3] <= 1'b1;    // OUT_READY
-      @(posedge clk);
-      uio_in[3] <= 1'b0;
+        // --- Alternativa FST (mais compacto): descomente estas duas linhas
+        // e rode com: vvp -fst sim.test
+        // $dumpfile("cordic_wrapper_tb.fst");
+        // $dumpvars(0, tb_cordic_wrapper);
     end
-  end
-  endtask
+
+    CORDIC_tapeout_wrapper #(.WIDTH(WIDTH)) dut (
+        .clk(clk),
+        .rst_n(rst_n),
+        .ena(ena),
+        .ui_in(ui_in),
+        .uo_out(uo_out),
+        .uio_in(uio_in_dut),
+        .uio_en(uio_en_tb),
+        .uio_out(uio_out_tb)
+    );
+
+    wire dut_in_ready   = uio_out_tb[1];
+    wire dut_out_valid  = uio_out_tb[2];
+
+    reg tb_in_valid;
+    reg tb_out_ready;
+
+    always @* begin
+        uio_in_tb[0] = tb_in_valid;  // in_valid
+        uio_in_tb[3] = tb_out_ready; // out_ready
+    end
+
+    // Clock
+    always begin
+        clk = 1'b0; #(CLK_PERIOD/2);
+        clk = 1'b1; #(CLK_PERIOD/2);
+    end
+
+    // --- envio ---
+    task send_first_byte(input [7:0] data);
+    begin
+        @(posedge clk);
+        $display("[%0t ns] TB: Aguardando in_ready do DUT para enviar 0x%h...", $time, data);
+        wait (dut_in_ready == 1'b1);
+        ui_in <= data;
+        tb_in_valid <= 1'b1;
+        @(posedge clk);
+        tb_in_valid <= 1'b0;
+        ui_in <= 8'hzz;
+    end
+    endtask
+
+    task send_next_byte(input [7:0] data);
+    begin
+        @(posedge clk);
+        ui_in <= data;
+        tb_in_valid <= 1'b1;
+        @(posedge clk);
+        tb_in_valid <= 1'b0;
+        ui_in <= 8'hzz;
+    end
+    endtask
+
+    // --- recepção ---
+    task receive_byte(output [7:0] data);
+    begin
+        @(posedge clk);
+        wait (dut_out_valid == 1'b1);
+        data = uo_out;
+        tb_out_ready <= 1'b1;
+        @(posedge clk);
+        tb_out_ready <= 1'b0;
+    end
+    endtask
+
+    // --- execução de um teste ---
+    task run_test(input signed [WIDTH-1:0] x_val, input signed [WIDTH-1:0] y_val);
+        reg signed [WIDTH-1:0] mag_res;
+        reg signed [31:0]      phase_res;
+        reg [7:0] byte_data;
+    begin
+        $display("\n=== Teste: X = %0d (0x%h), Y = %0d (0x%h) ===", x_val, x_val, y_val, y_val);
+
+        send_first_byte(x_val[7:0]);
+        send_next_byte(x_val[15:8]);
+        send_next_byte(y_val[7:0]);
+        send_next_byte(y_val[15:8]);
+
+        receive_byte(byte_data); mag_res[7:0]   = byte_data;
+        receive_byte(byte_data); mag_res[15:8]  = byte_data;
+        receive_byte(byte_data); phase_res[7:0]   = byte_data;
+        receive_byte(byte_data); phase_res[15:8]  = byte_data;
+        receive_byte(byte_data); phase_res[23:16] = byte_data;
+        receive_byte(byte_data); phase_res[31:24] = byte_data;
+
+        $display(">>> Resultado: Magnitude = %0d (0x%h)", mag_res, mag_res);
+        $display(">>> Resultado: Fase = %0d (0x%h)", phase_res, phase_res);
+    end
+    endtask
+
+    // --- inicialização ---
+    initial begin
+        $display("--- INICIANDO TESTBENCH ---");
+        rst_n <= 1'b0;
+        ena <= 1'b1;
+        ui_in <= 8'hzz;
+        tb_in_valid <= 1'b0;
+        tb_out_ready <= 1'b0;
+
+        repeat(20) @(posedge clk);
+        rst_n <= 1'b1;
+        $display("[%0t ns] Reset liberado.", $time);
+
+        wait (dut_in_ready == 1'b1);
+        $display("[%0t ns] DUT pronto para receber.", $time);
+
+        // Novos valores (diferentes dos anteriores), 1 por quadrante
+        run_test( 12000,   8000);   // Q1: X>0, Y>0
+        #(20*CLK_PERIOD);
+
+        run_test(-15000,  10000);   // Q2: X<0, Y>0
+        #(20*CLK_PERIOD);
+
+        run_test(-18000, -22000);   // Q3: X<0, Y<0
+        #(20*CLK_PERIOD);
+
+        run_test( 25000, -12000);   // Q4: X>0, Y<0
+        #(20*CLK_PERIOD);
+
+        $display("\n--- TESTBENCH CONCLUÍDO ---");
+        $finish;
+    end
 
 endmodule
-
-`default_nettype wire
