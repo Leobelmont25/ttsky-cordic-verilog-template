@@ -4,7 +4,7 @@ module CORDIC_wrapper_tb;
     // sinais TT
     initial begin
         $dumpfile("CORDIC_wrapper_tb.vcd");
-        $dumpvars(0, CORDIC_wrapper_tb);
+        $dumpvars(0, tb);
         #1;
     end
     
